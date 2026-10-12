@@ -14,7 +14,7 @@
 <section class="panel"><h2>လုပ်ဆောင်မှု အခြေအနေ</h2><div id="status" class="status">Video ရွေးပြီး စတင်နိုင်ပါပြီ။</div><div class="bar"><span id="progress"></span></div></section>
 <footer class="footer">API Key များကို Browser ထဲမထည့်ပါ။ Cloudflare Worker Secrets အဖြစ်သာ သိမ်းပါ။ မိမိပိုင်ဆိုင်သော သို့မဟုတ် အသုံးပြုခွင့်ရှိသော Media များကိုသာ လုပ်ဆောင်ပါ။</footer>
 </main><script>
-const API_BASE = 'https://script-tts.thetphyo77790.workers.dev/'; // Replace with your newly deployed API Worker URL
+const API_BASE = 'https://script-tts.thetphyo77790.workers.dev'; // Replace with your newly deployed API Worker URL
 const $=id=>document.getElementById(id);let busy=false;
 function status(msg,type=''){ $('status').textContent=msg;$('status').className='status '+type; }
 function progress(n){$('progress').style.width=n+'%'}
