@@ -31,7 +31,7 @@ button:disabled{opacity:.45;cursor:not-allowed}.actions{display:flex;gap:9px;fle
 <div class="actions"><button id="tts" disabled>မြန်မာအသံ MP3 + SRT ထုတ်ရန်</button><button id="copyTranslated" class="secondary">ဘာသာပြန် ကူးရန်</button></div>
 <div id="audioWrap" class="hidden"><audio id="audio" controls style="width:100%;margin-top:14px"></audio><br><a id="download" class="download" download="myanmar-voice.mp3">MP3 ဖိုင် Download ချရန်</a><a id="srtDownload" class="download" download="myanmar-subtitles.srt">SRT ဖိုင် Download ချရန်</a><div class="field"><label for="srtPreview">SRT Preview (အချိန်ခန့်မှန်းထားသည်)</label><textarea id="srtPreview" readonly></textarea></div></div></section>
 <section class="panel"><h2>လုပ်ဆောင်မှု အခြေအနေ</h2><div id="status" class="status">Video ရွေးပြီး စတင်နိုင်ပါပြီ။</div><div class="bar"><span id="progress"></span></div></section>
-<footer class="footer">API Key များကို Browser ထဲမထည့်ပါ။ Cloudflare Worker Secrets အဖြစ်သာ သိမ်းပါ။ မိမိပိုင်ဆိုင်သော သို့မဟုတ် အသုံးပြုခွင့်ရှိသော Media များကိုသာ လုပ်ဆောင်ပါ။ Speed/Pitch အတိုင်းအတာကို Worker က ပံ့ပိုးပေးရပါမည်။ SRT အချိန်များသည် စာသားအရှည်အပေါ် ခန့်မှန်းတွက်ချက်ထားပြီး အသံနှင့် အတိအကျကိုက်ညီမည်မဟုတ်ပါ။</footer>
+<footer class="footer">API Key များကို Browser ထဲမထည့်ပါ။ Cloudflare Worker Secrets အဖြစ်သာ သိမ်းပါ။ မိမိပိုင်ဆိုင်သော သို့မဟုတ် အသုံးပြုခွင့်ရှိသော Media များကိုသာ လုပ်ဆောင်ပါ။ Speed/Pitch အတိုင်းအတာကို Worker က ပံ့ပိုးပေးရပါမည်။ SRT အချိန်များကို စာကြောင်းတစ်ကြောင်းချင်းစီ TTS ထုတ်ပြီး တကယ့်အသံကြာချိန်ကို တိုင်းတာကာ သတ်မှတ်သည်။ MP3 အပိုင်းဆက်ရာတွင် အနည်းငယ်ကွာခြားနိုင်သည်။</footer>
 </main><script>
 const API_BASE = 'https://script-tts.thetphyo77790.workers.dev';
 const $=id=>document.getElementById(id);let busy=false;
@@ -48,31 +48,134 @@ $('translate').onclick=async()=>{const text=$('source').value.trim();if(!text)re
 $('speed').addEventListener('input',()=>{const v=Number($('speed').value);$('speedOut').textContent=(v>0?'+':'')+v+'%'});
 $('pitch').addEventListener('input',()=>{const v=Number($('pitch').value);$('pitchOut').textContent=(v>0?'+':'')+v+'%'});
 
-function makeSRT(text,speed){
-  const lines=text.replace(/\r/g,'').split(/(?<=[။.!?…])\s+|\n+/u).map(s=>s.trim()).filter(Boolean);
-  let time=0;
-  function stamp(sec){const ms=Math.round(sec*1000);const h=Math.floor(ms/3600000);const m=Math.floor(ms%3600000/60000);const s=Math.floor(ms%60000/1000);const x=ms%1000;return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(x).padStart(3,'0')}`;}
-  return lines.map((line,i)=>{const start=time;const chars=[...line].filter(c=>!/\s/.test(c)).length;const duration=Math.max(1.2,(chars/11)/Math.max(0.25,1+speed/100)+(/[။.!?…]$/.test(line)?0.35:0));time+=duration;return `${i+1}\n${stamp(start)} --> ${stamp(time)}\n${line}\n`;}).join('\n');
+function splitForTTS(text) {
+  const sentences = text.replace(/\r/g, '').split(/(?<=[။.!?…])\s+|\n+/u)
+    .map(s => s.trim()).filter(Boolean);
+  const chunks = [];
+  let current = '';
+  for (const sentence of sentences) {
+    const parts = sentence.length > 350
+      ? sentence.match(/.{1,300}(?:\s+|$)/gu) || [sentence]
+      : [sentence];
+    for (const raw of parts) {
+      const part = raw.trim();
+      if (!part) continue;
+      if (current && current.length + part.length + 1 > 350) {
+        chunks.push(current);
+        current = part;
+      } else {
+        current = current ? current + ' ' + part : part;
+      }
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
 }
-$('tts').onclick=async()=>{
-  const text=$('translated').value.trim();if(!text)return;
-  setBusy(true);progress(78);status('Microsoft TTS မှ အသံ MP3 ထုတ်နေပါတယ်…');$('audioWrap').classList.add('hidden');
-  try{
-    const speed=Number($('speed').value),pitch=Number($('pitch').value);
-    const r=await api('/tts',JSON.stringify({text,voice:$('voice').value,format:'mp3',speed,pitch}),{'Content-Type':'application/json'});
-    const ct=r.headers.get('content-type')||'';let blob;
-    if(ct.includes('application/json')){
-      const j=await r.json();
-      if(j.audioBase64){const raw=atob(j.audioBase64);const arr=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i);blob=new Blob([arr],{type:j.mimeType||'audio/mpeg'});}
-      else if(j.audio_url){const rr=await fetch(j.audio_url);if(!rr.ok)throw new Error('အသံဖိုင် URL ကို ဖွင့်မရပါ။');blob=await rr.blob();}
-      else throw new Error(j.error||'MP3 data မရပါ။');
-    }else blob=await r.blob();
-    if(!blob.size)throw new Error('အသံဖိုင်အလွတ် ဖြစ်နေပါတယ်။');
-    const audioUrl=URL.createObjectURL(blob);$('audio').src=audioUrl;$('download').href=audioUrl;
-    const srt=makeSRT(text,speed);const srtBlob=new Blob(['\uFEFF'+srt],{type:'text/plain;charset=utf-8'});const srtUrl=URL.createObjectURL(srtBlob);
-    $('srtDownload').href=srtUrl;$('srtPreview').value=srt;$('audioWrap').classList.remove('hidden');
-    progress(100);status('MP3 နဲ့ SRT ဖိုင် အဆင်သင့်ဖြစ်ပါပြီ။ SRT အချိန်များသည် ခန့်မှန်းချက်ဖြစ်ပါတယ်။','ok');
-  }catch(e){status('TTS မအောင်မြင်ပါ: '+e.message,'error')}finally{setBusy(false)}
+
+function stampSRT(seconds) {
+  const ms = Math.max(0, Math.round(seconds * 1000));
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor(ms % 3600000 / 60000);
+  const s = Math.floor(ms % 60000 / 1000);
+  const x = ms % 1000;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(x).padStart(3,'0')}`;
+}
+
+async function getAudioDuration(blob) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = new Audio();
+    a.preload = 'metadata';
+    a.src = url;
+    await new Promise((resolve, reject) => {
+      a.onloadedmetadata = resolve;
+      a.onerror = () => reject(new Error('TTS အသံအပိုင်းရဲ့ ကြာချိန်ကို မဖတ်နိုင်ပါ။'));
+    });
+    if (!Number.isFinite(a.duration) || a.duration <= 0) {
+      throw new Error('TTS အသံကြာချိန် မမှန်ပါ။');
+    }
+    return a.duration;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function getTTSBlob(text, voice, speed, pitch) {
+  const r = await api('/tts', JSON.stringify({
+    text, voice, format: 'mp3', speed, pitch
+  }), {'Content-Type': 'application/json'});
+
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) return await r.blob();
+
+  const j = await r.json();
+  if (j.audioBase64) {
+    const raw = atob(j.audioBase64);
+    const arr = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+    return new Blob([arr], {type: j.mimeType || 'audio/mpeg'});
+  }
+  if (j.audio_url) {
+    const rr = await fetch(j.audio_url);
+    if (!rr.ok) throw new Error('အသံဖိုင် URL ကို ဖွင့်မရပါ။');
+    return await rr.blob();
+  }
+  throw new Error(j.error || 'MP3 data မရပါ။');
+}
+
+$('tts').onclick = async () => {
+  const text = $('translated').value.trim();
+  if (!text) return;
+
+  setBusy(true);
+  progress(72);
+  status('စာကြောင်းတစ်ကြောင်းချင်းစီ အသံထုတ်ပြီး တကယ့်ကြာချိန်နဲ့ SRT ချိန်ညှိနေပါတယ်…');
+  $('audioWrap').classList.add('hidden');
+
+  try {
+    const speed = Number($('speed').value);
+    const pitch = Number($('pitch').value);
+    const voice = $('voice').value;
+    const segments = splitForTTS(text);
+    if (!segments.length) throw new Error('TTS ထုတ်မယ့် စာသား မရှိပါ။');
+
+    const audioParts = [];
+    const timings = [];
+    let time = 0;
+
+    for (let i = 0; i < segments.length; i++) {
+      status(`TTS အသံထုတ်နေပါတယ်… ${i + 1}/${segments.length}\nစာကြောင်းတစ်ကြောင်းချင်းစီရဲ့ တကယ့်အသံကြာချိန်ကို တိုင်းတာနေပါတယ်။`);
+      const blob = await getTTSBlob(segments[i], voice, speed, pitch);
+      if (!blob.size) throw new Error(`အပိုင်း ${i + 1} ရဲ့ အသံဖိုင်အလွတ် ဖြစ်နေပါတယ်။`);
+
+      const duration = await getAudioDuration(blob);
+      audioParts.push(blob);
+      timings.push({text: segments[i], start: time, end: time + duration});
+      time += duration;
+      progress(72 + Math.round(((i + 1) / segments.length) * 25));
+    }
+
+    const finalBlob = new Blob(audioParts, {type: 'audio/mpeg'});
+    const audioUrl = URL.createObjectURL(finalBlob);
+    $('audio').src = audioUrl;
+    $('download').href = audioUrl;
+
+    const srt = timings.map((item, i) =>
+      `${i + 1}\n${stampSRT(item.start)} --> ${stampSRT(item.end)}\n${item.text}\n`
+    ).join('\n');
+
+    const srtBlob = new Blob(['\uFEFF' + srt], {type: 'text/plain;charset=utf-8'});
+    $('srtDownload').href = URL.createObjectURL(srtBlob);
+    $('srtPreview').value = srt;
+    $('audioWrap').classList.remove('hidden');
+
+    progress(100);
+    status('MP3 နဲ့ SRT ထုတ်ပြီးပါပြီ။ SRT အချိန်တွေကို TTS အပိုင်းတစ်ခုချင်းစီရဲ့ တကယ့်အသံကြာချိန်အပေါ် အခြေခံထားပါတယ်။ MP3 အပိုင်းဆက်ရာမှာ အနည်းငယ်ကွာခြားနိုင်ပါတယ်။', 'ok');
+  } catch (e) {
+    status('TTS မအောင်မြင်ပါ: ' + e.message, 'error');
+  } finally {
+    setBusy(false);
+  }
 };
 $('copySource').onclick=async()=>{try{await navigator.clipboard.writeText($('source').value);status('မူရင်း Script ကူးပြီးပါပြီ။','ok')}catch{status('ကူးမရပါ။ စာသားကို ဖိထားပြီး Copy လုပ်ပါ။','error')}};
 $('copyTranslated').onclick=async()=>{try{await navigator.clipboard.writeText($('translated').value);status('ဘာသာပြန် Script ကူးပြီးပါပြီ။','ok')}catch{status('ကူးမရပါ။ စာသားကို ဖိထားပြီး Copy လုပ်ပါ။','error')}};
