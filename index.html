@@ -29,9 +29,9 @@ button:disabled{opacity:.45;cursor:not-allowed}.actions{display:flex;gap:9px;fle
 <div class="field"><div class="range-head"><label for="speed">Speed</label><output id="speedOut">0%</output></div><input id="speed" type="range" min="-100" max="100" value="0" step="5"><p class="hint">−100% နှေး · 0% ပုံမှန် · +100% မြန်</p></div>
 <div class="field"><div class="range-head"><label for="pitch">Pitch</label><output id="pitchOut">0%</output></div><input id="pitch" type="range" min="-100" max="100" value="0" step="5"><p class="hint">−100% အသံနိမ့် · 0% ပုံမှန် · +100% အသံမြင့်</p></div>
 <div class="actions"><button id="tts" disabled>မြန်မာအသံ MP3 + SRT ထုတ်ရန်</button><button id="copyTranslated" class="secondary">ဘာသာပြန် ကူးရန်</button></div>
-<div id="audioWrap" class="hidden"><audio id="audio" controls style="width:100%;margin-top:14px"></audio><br><a id="download" class="download" download="myanmar-voice.mp3">MP3 ဖိုင် Download ချရန်</a><a id="srtDownload" class="download" download="myanmar-subtitles.srt">SRT ဖိုင် Download ချရန်</a><div class="field"><label for="srtPreview">SRT Preview (စာကြောင်း ၂၀ စကားလုံးဝန်းကျင်၊ TTS အသံကြာချိန်အလိုက်)</label><textarea id="srtPreview" readonly></textarea></div></div></section>
+<div id="audioWrap" class="hidden"><audio id="audio" controls style="width:100%;margin-top:14px"></audio><br><a id="download" class="download" download="myanmar-voice.mp3">MP3 ဖိုင် Download ချရန်</a><a id="srtDownload" class="download" download="myanmar-subtitles.srt">SRT ဖိုင် Download ချရန်</a><div class="field"><label for="srtPreview">SRT Preview (အချိန်ခန့်မှန်းထားသည်)</label><textarea id="srtPreview" readonly></textarea></div></div></section>
 <section class="panel"><h2>လုပ်ဆောင်မှု အခြေအနေ</h2><div id="status" class="status">Video ရွေးပြီး စတင်နိုင်ပါပြီ။</div><div class="bar"><span id="progress"></span></div></section>
-<footer class="footer">API Key များကို Browser ထဲမထည့်ပါ။ Cloudflare Worker Secrets အဖြစ်သာ သိမ်းပါ။ မိမိပိုင်ဆိုင်သော သို့မဟုတ် အသုံးပြုခွင့်ရှိသော Media များကိုသာ လုပ်ဆောင်ပါ။ Speed/Pitch အတိုင်းအတာကို Worker က ပံ့ပိုးပေးရပါမည်။ SRT ကို စာကြောင်းတစ်ကြောင်းလျှင် မြန်မာစကားလုံး ၂၀ ဝန်းကျင် ခွဲပြီး TTS အပိုင်းတစ်ခုချင်းစီ၏ တကယ့်အသံကြာချိန်ဖြင့် timestamp သတ်မှတ်သည်။ MP3 အပိုင်းဆက်ရာတွင် အနည်းငယ်ကွာခြားနိုင်သည်။</footer>
+<footer class="footer">API Key များကို Browser ထဲမထည့်ပါ။ Cloudflare Worker Secrets အဖြစ်သာ သိမ်းပါ။ မိမိပိုင်ဆိုင်သော သို့မဟုတ် အသုံးပြုခွင့်ရှိသော Media များကိုသာ လုပ်ဆောင်ပါ။ Speed/Pitch အတိုင်းအတာကို Worker က ပံ့ပိုးပေးရပါမည်။ SRT အချိန်များကို စာကြောင်းတစ်ကြောင်းချင်းစီ TTS ထုတ်ပြီး တကယ့်အသံကြာချိန်ကို တိုင်းတာကာ သတ်မှတ်သည်။ MP3 အပိုင်းဆက်ရာတွင် အနည်းငယ်ကွာခြားနိုင်သည်။</footer>
 </main><script>
 const API_BASE = 'https://script-tts.thetphyo77790.workers.dev';
 const $=id=>document.getElementById(id);let busy=false;
@@ -48,49 +48,45 @@ $('translate').onclick=async()=>{const text=$('source').value.trim();if(!text)re
 $('speed').addEventListener('input',()=>{const v=Number($('speed').value);$('speedOut').textContent=(v>0?'+':'')+v+'%'});
 $('pitch').addEventListener('input',()=>{const v=Number($('pitch').value);$('pitchOut').textContent=(v>0?'+':'')+v+'%'});
 
-// Split Burmese subtitles into roughly 20 word units per TTS chunk.
-// Modern Android Chrome supports Intl.Segmenter for Myanmar word boundaries.
-// Every chunk is synthesized separately; SRT timing uses that chunk's measured audio duration.
-function splitForTTS(text, maxWords = 20) {
-  text = String(text || '').replace(/\r/g, '').trim();
-  if (!text) return [];
-
+function splitForTTS(text) {
+  // Keep subtitles compact without a fixed 20-word limit.
+  // Aim for ~90 Burmese characters; prefer sentence and phrase boundaries.
+  const clean = text.replace(/\r/g, '').replace(/[ \t]+/g, ' ').trim();
+  const sentences = clean.split(/(?<=[။.!?…])\s+|\n+/u).map(s => s.trim()).filter(Boolean);
+  const MAX_CHARS = 95;
   const chunks = [];
   let current = '';
-  let wordCount = 0;
-  const sentenceEnd = /[။.!?…][”’"'”’）)\]]*$/u;
 
-  function flush() {
-    const value = current.trim();
-    if (value) chunks.push(value);
-    current = '';
-    wordCount = 0;
+  function splitLong(sentence) {
+    const out = [];
+    let rest = sentence.trim();
+    while (rest.length > MAX_CHARS) {
+      let cut = -1;
+      // Prefer punctuation / natural phrase breaks, then whitespace.
+      const minCut = Math.floor(MAX_CHARS * 0.55);
+      for (let i = Math.min(MAX_CHARS, rest.length - 1); i >= minCut; i--) {
+        if (/[၊,;:။!?…]/u.test(rest[i]) || /\s/u.test(rest[i])) { cut = i + 1; break; }
+      }
+      if (cut < minCut) cut = MAX_CHARS;
+      out.push(rest.slice(0, cut).trim());
+      rest = rest.slice(cut).trim();
+    }
+    if (rest) out.push(rest);
+    return out;
   }
 
-  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-    const segmenter = new Intl.Segmenter('my', {granularity: 'word'});
-    for (const part of segmenter.segment(text)) {
-      const piece = part.segment;
-      if (part.isWordLike && wordCount >= maxWords && current.trim()) flush();
-      current += piece;
-      if (part.isWordLike) wordCount++;
-      // Keep sentence endings together and avoid joining unrelated sentences into one caption.
-      if (/[။.!?…]/u.test(piece) && sentenceEnd.test(current.trim())) flush();
-      // A long unpunctuated run still gets split at the configured word count.
-      if (wordCount >= maxWords && /\s/u.test(piece)) flush();
-    }
-  } else {
-    // Fallback for older browsers: preserve punctuation and split on visible spaces/newlines.
-    const tokens = text.split(/(\s+)/u).filter(Boolean);
-    for (const token of tokens) {
-      const isSpace = /^\s+$/u.test(token);
-      if (!isSpace && wordCount >= maxWords && current.trim()) flush();
-      current += token;
-      if (!isSpace) wordCount++;
-      if (/[။.!?…]/u.test(token)) flush();
+  for (const sentence of sentences) {
+    for (const part of splitLong(sentence)) {
+      if (!part) continue;
+      if (current && (current.length + 1 + part.length > MAX_CHARS || /[။.!?…]$/u.test(current))) {
+        chunks.push(current.trim());
+        current = part;
+      } else {
+        current = current ? current + ' ' + part : part;
+      }
     }
   }
-  flush();
+  if (current.trim()) chunks.push(current.trim());
   return chunks;
 }
 
@@ -122,7 +118,7 @@ async function getAudioDuration(blob) {
   }
 }
 
-async function getTTSBlob(text, voice, speed, pitch) {
+async function getTTSBlobOnce(text, voice, speed, pitch) {
   const r = await api('/tts', JSON.stringify({
     text, voice, format: 'mp3', speed, pitch
   }), {'Content-Type': 'application/json'});
@@ -143,6 +139,23 @@ async function getTTSBlob(text, voice, speed, pitch) {
     return await rr.blob();
   }
   throw new Error(j.error || 'MP3 data မရပါ။');
+}
+
+
+async function getTTSBlob(text, voice, speed, pitch) {
+  let lastError;
+  const waits = [1200, 2800, 5000];
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    try {
+      return await getTTSBlobOnce(text, voice, speed, pitch);
+    } catch (e) {
+      lastError = e;
+      if (attempt === waits.length) break;
+      status(`TTS ခဏအမှားဖြစ်နေပါတယ်။ ${attempt + 1}/3 ကြိမ် ပြန်ကြိုးစားနေပါတယ်…\n${e.message}`);
+      await new Promise(resolve => setTimeout(resolve, waits[attempt]));
+    }
+  }
+  throw new Error(lastError?.message || 'TTS request မအောင်မြင်ပါ။');
 }
 
 $('tts').onclick = async () => {
