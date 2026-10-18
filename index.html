@@ -29,9 +29,9 @@ button:disabled{opacity:.45;cursor:not-allowed}.actions{display:flex;gap:9px;fle
 <div class="field"><div class="range-head"><label for="speed">Speed</label><output id="speedOut">0%</output></div><input id="speed" type="range" min="-100" max="100" value="0" step="5"><p class="hint">−100% နှေး · 0% ပုံမှန် · +100% မြန်</p></div>
 <div class="field"><div class="range-head"><label for="pitch">Pitch</label><output id="pitchOut">0%</output></div><input id="pitch" type="range" min="-100" max="100" value="0" step="5"><p class="hint">−100% အသံနိမ့် · 0% ပုံမှန် · +100% အသံမြင့်</p></div>
 <div class="actions"><button id="tts" disabled>မြန်မာအသံ MP3 + SRT ထုတ်ရန်</button><button id="copyTranslated" class="secondary">ဘာသာပြန် ကူးရန်</button></div>
-<div id="audioWrap" class="hidden"><audio id="audio" controls style="width:100%;margin-top:14px"></audio><br><a id="download" class="download" download="myanmar-voice.mp3">MP3 ဖိုင် Download ချရန်</a><a id="srtDownload" class="download" download="myanmar-subtitles.srt">SRT ဖိုင် Download ချရန်</a><div class="field"><label for="srtPreview">SRT Preview (အချိန်ခန့်မှန်းထားသည်)</label><textarea id="srtPreview" readonly></textarea></div></div></section>
+<div id="audioWrap" class="hidden"><audio id="audio" controls style="width:100%;margin-top:14px"></audio><br><a id="download" class="download" download="myanmar-voice.mp3">MP3 ဖိုင် Download ချရန်</a><a id="srtDownload" class="download" download="myanmar-subtitles.srt">SRT ဖိုင် Download ချရန်</a><div class="field"><label for="srtPreview">SRT Preview (စာကြောင်း ၂၀ စကားလုံးဝန်းကျင်၊ TTS အသံကြာချိန်အလိုက်)</label><textarea id="srtPreview" readonly></textarea></div></div></section>
 <section class="panel"><h2>လုပ်ဆောင်မှု အခြေအနေ</h2><div id="status" class="status">Video ရွေးပြီး စတင်နိုင်ပါပြီ။</div><div class="bar"><span id="progress"></span></div></section>
-<footer class="footer">API Key များကို Browser ထဲမထည့်ပါ။ Cloudflare Worker Secrets အဖြစ်သာ သိမ်းပါ။ မိမိပိုင်ဆိုင်သော သို့မဟုတ် အသုံးပြုခွင့်ရှိသော Media များကိုသာ လုပ်ဆောင်ပါ။ Speed/Pitch အတိုင်းအတာကို Worker က ပံ့ပိုးပေးရပါမည်။ SRT အချိန်များကို စာကြောင်းတစ်ကြောင်းချင်းစီ TTS ထုတ်ပြီး တကယ့်အသံကြာချိန်ကို တိုင်းတာကာ သတ်မှတ်သည်။ MP3 အပိုင်းဆက်ရာတွင် အနည်းငယ်ကွာခြားနိုင်သည်။</footer>
+<footer class="footer">API Key များကို Browser ထဲမထည့်ပါ။ Cloudflare Worker Secrets အဖြစ်သာ သိမ်းပါ။ မိမိပိုင်ဆိုင်သော သို့မဟုတ် အသုံးပြုခွင့်ရှိသော Media များကိုသာ လုပ်ဆောင်ပါ။ Speed/Pitch အတိုင်းအတာကို Worker က ပံ့ပိုးပေးရပါမည်။ SRT ကို စာကြောင်းတစ်ကြောင်းလျှင် မြန်မာစကားလုံး ၂၀ ဝန်းကျင် ခွဲပြီး TTS အပိုင်းတစ်ခုချင်းစီ၏ တကယ့်အသံကြာချိန်ဖြင့် timestamp သတ်မှတ်သည်။ MP3 အပိုင်းဆက်ရာတွင် အနည်းငယ်ကွာခြားနိုင်သည်။</footer>
 </main><script>
 const API_BASE = 'https://script-tts.thetphyo77790.workers.dev';
 const $=id=>document.getElementById(id);let busy=false;
@@ -48,27 +48,49 @@ $('translate').onclick=async()=>{const text=$('source').value.trim();if(!text)re
 $('speed').addEventListener('input',()=>{const v=Number($('speed').value);$('speedOut').textContent=(v>0?'+':'')+v+'%'});
 $('pitch').addEventListener('input',()=>{const v=Number($('pitch').value);$('pitchOut').textContent=(v>0?'+':'')+v+'%'});
 
-function splitForTTS(text) {
-  const sentences = text.replace(/\r/g, '').split(/(?<=[။.!?…])\s+|\n+/u)
-    .map(s => s.trim()).filter(Boolean);
+// Split Burmese subtitles into roughly 20 word units per TTS chunk.
+// Modern Android Chrome supports Intl.Segmenter for Myanmar word boundaries.
+// Every chunk is synthesized separately; SRT timing uses that chunk's measured audio duration.
+function splitForTTS(text, maxWords = 20) {
+  text = String(text || '').replace(/\r/g, '').trim();
+  if (!text) return [];
+
   const chunks = [];
   let current = '';
-  for (const sentence of sentences) {
-    const parts = sentence.length > 350
-      ? sentence.match(/.{1,300}(?:\s+|$)/gu) || [sentence]
-      : [sentence];
-    for (const raw of parts) {
-      const part = raw.trim();
-      if (!part) continue;
-      if (current && current.length + part.length + 1 > 350) {
-        chunks.push(current);
-        current = part;
-      } else {
-        current = current ? current + ' ' + part : part;
-      }
+  let wordCount = 0;
+  const sentenceEnd = /[။.!?…][”’"'”’）)\]]*$/u;
+
+  function flush() {
+    const value = current.trim();
+    if (value) chunks.push(value);
+    current = '';
+    wordCount = 0;
+  }
+
+  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+    const segmenter = new Intl.Segmenter('my', {granularity: 'word'});
+    for (const part of segmenter.segment(text)) {
+      const piece = part.segment;
+      if (part.isWordLike && wordCount >= maxWords && current.trim()) flush();
+      current += piece;
+      if (part.isWordLike) wordCount++;
+      // Keep sentence endings together and avoid joining unrelated sentences into one caption.
+      if (/[။.!?…]/u.test(piece) && sentenceEnd.test(current.trim())) flush();
+      // A long unpunctuated run still gets split at the configured word count.
+      if (wordCount >= maxWords && /\s/u.test(piece)) flush();
+    }
+  } else {
+    // Fallback for older browsers: preserve punctuation and split on visible spaces/newlines.
+    const tokens = text.split(/(\s+)/u).filter(Boolean);
+    for (const token of tokens) {
+      const isSpace = /^\s+$/u.test(token);
+      if (!isSpace && wordCount >= maxWords && current.trim()) flush();
+      current += token;
+      if (!isSpace) wordCount++;
+      if (/[။.!?…]/u.test(token)) flush();
     }
   }
-  if (current) chunks.push(current);
+  flush();
   return chunks;
 }
 
